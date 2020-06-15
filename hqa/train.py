@@ -163,7 +163,7 @@ def train(FLAGS, rank=0):
     model.to(device)
     optimizer = RAdam(model.parameters(), lr=FLAGS.lr)
     model, optimizer = amp.initialize(model, optimizer, opt_level=FLAGS.amp)
-    scheduler = FlatCA(optimizer, steps=FLAGS.steps, eta_min=1e-6, decay_proportion=1.0)
+    scheduler = FlatCA(optimizer, steps=FLAGS.steps, eta_min=1e-6, decay_proportion=0.5)
 
     step = 0
 
@@ -195,7 +195,7 @@ def train(FLAGS, rank=0):
         DblStream(
             sampler=DblSampler(val_dbl, loop_data=False),
             single_file_stream_class=RawStream,
-            window_size=320000,  # 3 seconds for validation
+            window_size=144000,  # 3 seconds for validation
             pad_final=True,
         )
         for _ in range(4)
@@ -267,7 +267,7 @@ def train(FLAGS, rank=0):
 
                 # anneal temperature
                 if FLAGS.decay_temp is True:
-                    model.codebook.temperature = decay_temp_linear(
+                    model.codebook.temperature = decay_temp_exp(
                         step + 1,
                         FLAGS.steps,
                         temp_base=FLAGS.gs_temp,
@@ -305,8 +305,8 @@ def train(FLAGS, rank=0):
 
                 with torch.no_grad():
                     # reconstruct all the way, clip to save memory
-                    if data_mu.shape[2] > 65536:
-                        clipped_data_mu = data_mu[:, :, :65536]
+                    if data_mu.shape[2] > 64000:
+                        clipped_data_mu = data_mu[:, :, :64000]
                     else:
                         clipped_data_mu = data_mu
                     orig_mu_recon = model.reconstruct(clipped_data_mu)
@@ -361,8 +361,8 @@ def train(FLAGS, rank=0):
                     val_data = next(iter(val_datastream))["data"].to(device)
                     val_data = val_data.unsqueeze(1)
                     val_data_mu = mu_law_encoding(val_data)
-                    if val_data_mu.shape[2] > 65536:
-                        clipped_val_data_mu = val_data_mu[:, :, :65536]
+                    if val_data_mu.shape[2] > 144000:
+                        clipped_val_data_mu = val_data_mu[:, :, :144000]
                     else:
                         clipped_val_data_mu = val_data_mu
                 val_orig, val_recon = reconstruct_for_tensorboard(clipped_val_data_mu, model)
@@ -377,9 +377,13 @@ def train(FLAGS, rank=0):
                 tb_logger.add_audio(
                     "recon_samples_2", val_recon[2], step, sample_rate=sampling_rate
                 )
+                tb_logger.add_audio(
+                    "recon_samples_3", val_recon[3], step, sample_rate=sampling_rate
+                )
                 tb_logger.add_audio("original_0", val_orig[0], step, sample_rate=sampling_rate)
                 tb_logger.add_audio("original_1", val_orig[1], step, sample_rate=sampling_rate)
                 tb_logger.add_audio("original_2", val_orig[2], step, sample_rate=sampling_rate)
+                tb_logger.add_audio("original_3", val_orig[3], step, sample_rate=sampling_rate)
 
                 tb_logger.add_figure("train/gram_matrix", plot_l2_distances(cb_), step)
                 tb_logger.add_figure(
@@ -553,21 +557,22 @@ def get_model_properties(model, window_size, batch_size, downsample_factor):
     )
 
     # Encoder and decoder local/global receptive fields
-    enc_lrf, enc_grf, dec_lrf, dec_grf = get_receptive_fields(model, window_size=window_size)
-    enc_ms = ", ".join(f"{1000*r/sampling_rate:.1f}ms" for r in enc_grf)
-    dec_ms = ", ".join(f"{1000*r/sampling_rate:.1f}ms" for r in dec_grf)
-    model_properties.append(f"encoder local receptive field: {', '.join(str(r) for r in enc_lrf)}")
-    model_properties.append(
-        f"encoder global receptive field: {', '.join(str(r) for r in enc_grf)} ({enc_ms})"
-    )
-    model_properties.append(f"decoder local receptive field: {', '.join(str(r) for r in dec_lrf)}")
-    model_properties.append(
-        f"decoder global receptive field: {', '.join(str(r) for r in dec_grf)} ({dec_ms})"
-    )
-    resblock_rf = [layer.decoder.receptive_field for layer in model]
-    model_properties.append(
-        f"decoder resblock receptive field: {', '.join(str(r) for r in resblock_rf)}\n"
-    )
+    # TODO: This is a hack to get working on gpus w smaller memory
+    # enc_lrf, enc_grf, dec_lrf, dec_grf = get_receptive_fields(model, window_size=window_size)
+    # enc_ms = ", ".join(f"{1000*r/sampling_rate:.1f}ms" for r in enc_grf)
+    # dec_ms = ", ".join(f"{1000*r/sampling_rate:.1f}ms" for r in dec_grf)
+    # model_properties.append(f"encoder local receptive field: {', '.join(str(r) for r in enc_lrf)}")
+    # model_properties.append(
+    #     f"encoder global receptive field: {', '.join(str(r) for r in enc_grf)} ({enc_ms})"
+    # )
+    # model_properties.append(f"decoder local receptive field: {', '.join(str(r) for r in dec_lrf)}")
+    # model_properties.append(
+    #     f"decoder global receptive field: {', '.join(str(r) for r in dec_grf)} ({dec_ms})"
+    # )
+    # resblock_rf = [layer.decoder.receptive_field for layer in model]
+    # model_properties.append(
+    #     f"decoder resblock receptive field: {', '.join(str(r) for r in resblock_rf)}\n"
+    # )
 
     return "\n".join(model_properties), throughput, sampling_rate
 
@@ -578,6 +583,15 @@ def decay_temp_linear(step, total_steps, temp_base, temp_min=0.0001, decay_propo
     step_ = min(step, stop_decaying_step)
     factor = 1.0 - (step_ / stop_decaying_step)
     return torch.tensor(temp_min + (temp_base - temp_min) * factor)
+
+
+def decay_temp_exp(step, total_steps, temp_base, temp_min=0.0001, decay_proportion=1.0):
+    """ Exponential temp decay """
+    stop_decaying_step = int(ceil(total_steps * decay_proportion))
+    decay_const = (1 / stop_decaying_step) * log2(temp_base / temp_min)
+    step_ = min(step, stop_decaying_step)
+    temp = temp_base * 2 ** (-decay_const * step_)
+    return torch.tensor(temp)
 
 
 def burn_in_commit_beta_linear(step, total_steps, commit_beta, burn_in_proportion=1.0):

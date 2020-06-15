@@ -4,7 +4,7 @@
 GPUQ="-q gpu.q@cam2aml01.aml.speechmatics.io"
 VENV=/cantab/dev/inbetweeners/hydra/venv_stable/bin/activate
 train_data=/perish/data/music/train.dbl
-val_data=/perish/data/music/hqa_val.dbl
+val_data=/perish/data/music/hqa_val_short.dbl
 CUDA_WRAPPER=/usr/bin/cuda_wrapper
 CODE_DIR=${HOME}/git/hqa_jukebox
 EXPNAME=$(basename $BASH_SOURCE)
@@ -37,14 +37,12 @@ window_size=16384
 batch_size=4 # per gpu
 minimum_batch_size=4
 steps=200000
-enc_strides=2,2
+
 codebook_slots=512
 codebook_dim=128
 codebook_groups=2
-gs_temp=0.66
-decay_temp=True
-temp_decay_proportion=0.7
-temp_min=0.0001
+
+enc_strides=2,2
 enc_hidden_dim=128
 enc_kernel_size=8
 enc_num_layers=4
@@ -52,9 +50,15 @@ dec_n_residual=128
 dec_n_skip=128
 dec_dilation_depth=10
 dec_n_repeat=3
+
+gs_temp=0.4
+decay_temp=True
+temp_decay_proportion=0.4
+temp_min=0.0001
+
 learning_rate=4e-4
 entropy_beta=5e-5
-commit_beta=3e-2
+commit_beta=8e-2
 
 ## end set
 ###############
