@@ -39,7 +39,7 @@ minimum_batch_size=4
 steps=200000
 enc_strides=2,2
 codebook_slots=512
-codebook_dim=64
+codebook_dim=128
 codebook_groups=2
 gs_temp=0.66
 decay_temp=True
@@ -70,7 +70,6 @@ for layer in 0 1 2 3 4; do
     case $layer in
     0) prev_model=
        window_size=16000
-       codebook_dim=128
        codebook_groups=1
        enc_strides=5
        dec_dilation_depth=10
@@ -80,7 +79,6 @@ for layer in 0 1 2 3 4; do
        ;;
     1) prev_model=${WORK_ROOT}/layer0.pt
        window_size=24000
-       codebook_dim=128
        codebook_groups=2
        enc_strides=4
        dec_dilation_depth=10
@@ -90,7 +88,6 @@ for layer in 0 1 2 3 4; do
        ;;
     2) prev_model=${WORK_ROOT}/layer1.pt
        window_size=32000
-       codebook_dim=128
        codebook_groups=3
        enc_strides=2
        dec_dilation_depth=6
@@ -100,7 +97,6 @@ for layer in 0 1 2 3 4; do
        ;;
     3) prev_model=${WORK_ROOT}/layer2.pt
        window_size=48000
-       codebook_dim=128
        codebook_groups=5
        enc_strides=2
        dec_dilation_depth=6
@@ -110,38 +106,7 @@ for layer in 0 1 2 3 4; do
        ;;
     4) prev_model=${WORK_ROOT}/layer3.pt
        window_size=64000
-       codebook_dim=128
        codebook_groups=10
-       enc_strides=2
-       dec_dilation_depth=6
-       dec_n_repeat=5
-       enc_kernel_size=2
-       enc_num_layers=1
-       ;;
-    4_small_decoder) prev_model=${WORK_ROOT}/layer3.pt
-       window_size=64000
-       codebook_dim=128
-       codebook_groups=10
-       enc_strides=2
-       dec_dilation_depth=4
-       dec_n_repeat=1
-       enc_kernel_size=2
-       enc_num_layers=1
-       ;;
-    4_smaller_cd) prev_model=${WORK_ROOT}/layer3.pt
-       window_size=64000
-       codebook_dim=64
-       codebook_groups=10
-       enc_strides=2
-       dec_dilation_depth=6
-       dec_n_repeat=5
-       enc_kernel_size=2
-       enc_num_layers=1
-       ;;
-    4_smaller_cg) prev_model=${WORK_ROOT}/layer3.pt
-       window_size=64000
-       codebook_dim=128
-       codebook_groups=6
        enc_strides=2
        dec_dilation_depth=6
        dec_n_repeat=5
@@ -150,7 +115,7 @@ for layer in 0 1 2 3 4; do
        ;;
     esac
 
-    WORK_DIR=${WORK_ROOT}/20200514_${EXPNAME}_l${layer}
+    WORK_DIR=${WORK_ROOT}/$(date +"%Y%m%d")_${EXPNAME}_l${layer}
     if [[ -f "${WORK_DIR}/model.pt" ]]; then
         echo "${WORK_DIR} is already done. Skipping!"
         continue
@@ -178,7 +143,7 @@ for layer in 0 1 2 3 4; do
 #$ -notify
 #$ -o ${WORK_DIR}/results.log
 #$ -sync n
-#$ -N "LONG_5_l${layer}"
+#$ -N "P_hj_l${layer}"
 set -e pipefail;
 
 # job info
