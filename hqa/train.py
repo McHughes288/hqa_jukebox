@@ -190,15 +190,15 @@ def train(FLAGS, rank=0):
     train_datastream = MultiStreamDataLoader(train_streams, device=device)
 
     # setup testing dataloader
-    val_dbl = parse_audio_dbl(FLAGS.val_data)
+    val_dbl = parse_audio_dbl(FLAGS.val_data)[0:4]  # take first 4 files
     val_streams = [
         DblStream(
-            sampler=DblSampler(val_dbl, loop_data=False),
+            sampler=DblSampler([audio_file], loop_data=False),
             single_file_stream_class=RawStream,
-            window_size=144000,  # 3 seconds for validation
+            window_size=160000,  # 3 seconds for validation
             pad_final=True,
         )
-        for _ in range(4)
+        for audio_file in val_dbl
     ]
     val_datastream = MultiStreamDataLoader(val_streams, device=device)
 
@@ -361,8 +361,8 @@ def train(FLAGS, rank=0):
                     val_data = next(iter(val_datastream))["data"].to(device)
                     val_data = val_data.unsqueeze(1)
                     val_data_mu = mu_law_encoding(val_data)
-                    if val_data_mu.shape[2] > 144000:
-                        clipped_val_data_mu = val_data_mu[:, :, :144000]
+                    if val_data_mu.shape[2] > 160000:
+                        clipped_val_data_mu = val_data_mu[:, :, :160000]
                     else:
                         clipped_val_data_mu = val_data_mu
                 val_orig, val_recon = reconstruct_for_tensorboard(clipped_val_data_mu, model)
