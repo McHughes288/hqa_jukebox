@@ -166,6 +166,7 @@ def train(FLAGS, rank=0):
     scheduler = FlatCA(optimizer, steps=FLAGS.steps, eta_min=1e-6, decay_proportion=0.5)
 
     step = 0
+    optimizer.best_val_loss = inf
 
     if FLAGS.checkpoint:
         # loading state_dicts in-place
@@ -215,7 +216,6 @@ def train(FLAGS, rank=0):
         model, optimizer, scheduler, FLAGS.checkpoint_out, amp, rank, FLAGS.n_gpus
     )
 
-    best_val_loss = inf
     iterations = 0  # number of iterations from datastream
     loader_times = []
     model_times = []
@@ -464,14 +464,14 @@ def train(FLAGS, rank=0):
                 logging.info(f"step {step}, validation loss={val_loss.item():.3}")
                 tb_logger.add_scalar("val/loss", val_loss, step)
 
-                if val_loss.item() < best_val_loss:
+                if val_loss.item() < optimizer.best_val_loss:
                     logging.info("saving new best validation")
                     ext = ".bestval"
                     save(model, FLAGS.model_out + ext)
                     save_checkpoint(
                         FLAGS.checkpoint_out + ext, step, model, optimizer, amp, scheduler
                     )
-                    best_val_loss = val_loss.item()
+                    optimizer.best_val_loss = val_loss.item()
                     # save trained hqa with body wrapper
                     trained_model = TrainedHQA(model, quantize=True)
                     save(trained_model, FLAGS.model_out + ext + ".zq.trained")

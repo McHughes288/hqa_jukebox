@@ -16,9 +16,10 @@ flags.DEFINE_string("expdir", None, "directory to write all experiment data to")
 
 flags.DEFINE_integer("batch_size", None, "batch size, num parallel streams to train on at once")
 flags.DEFINE_integer("steps", None, "number of train steps before breaking")
+flags.DEFINE_integer("grad_acc_steps", 1, "number batches to accumulate grads before stepping")
 flags.DEFINE_float("lr", 4e-4, "learning rate")
 
-flags.DEFINE_integer("dl_max_workers", 4, "maximum number of dataloader subprocesses")
+flags.DEFINE_integer("dl_max_workers", 8, "maximum number of dataloader subprocesses")
 flags.DEFINE_integer("n_gpus", None, "do not set; automatically detected from CUDA_VISIBLE_DEVICES")
 flags.DEFINE_string("amp", "O1", "apex amp setting")
 

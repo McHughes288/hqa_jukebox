@@ -12,7 +12,7 @@ import random
 import shutil
 import signal
 import time
-from typing import Tuple
+from typing import Tuple, List
 
 from absl import flags, logging
 import numpy as np
@@ -41,15 +41,41 @@ def is_non_empty_file(path):
 
 
 def parse_audio_dbl(dbl_path):
+    cleansed_dbl = dbl_path.endswith(".clean")
+    if cleansed_dbl:
+        print(".dbl.clean found, skipping file checks")
     dbl_entries = []
     with open(dbl_path) as in_f:
         for line in in_f.readlines():
             line = line.strip()
-            if is_non_empty_file(line):
+            if cleansed_dbl or is_non_empty_file(line):
                 dbl_entries.append(line)
     if not dbl_entries:
         raise KeyError("dbl list is empty, check paths to dbl files")
     return dbl_entries
+
+
+def clean_dbl(dbl_path, columns=(0,)):
+    """
+    Clean a dbl by checking the right files exists in each entry
+    :arg dbl_path: path of dbl to clean
+    :arg columns: tuple of columns that specify a file that needs to be checked
+    """
+    missing_count = 0
+    out_path = dbl_path + ".clean"
+    with open(dbl_path) as in_f, open(out_path, "w") as out_f:
+        for i, line in enumerate(in_f.readlines()):
+            valid_line = True
+            entries = line.strip().split()
+            for column in columns:
+                if not is_non_empty_file(entries[column]):
+                    missing_count += 1
+                    valid_line = False
+                    break
+            if valid_line:
+                out_f.write(line + "\n")
+
+    print(f"{out_path} created, {i+1} files checked, {missing_count} files missing")
 
 
 def prepare_tb_logging(path=None):
@@ -401,13 +427,14 @@ class FocalLoss(nn.Module):
         return loss
 
 
-def save_checkpoint(path, step, model, optimizer, amp=None, scheduler=None, best_val_loss=None):
+def save_checkpoint(path, step, model, optimizer, amp=None, scheduler=None):
 
     checkpoint = {
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
         "step": step,
         "random_state": RandomStateCache(),
+        "best_val_loss": optimizer.best_val_loss,
     }
 
     if amp is not None:
@@ -415,9 +442,6 @@ def save_checkpoint(path, step, model, optimizer, amp=None, scheduler=None, best
 
     if scheduler is not None:
         checkpoint["scheduler"] = scheduler.state_dict()
-
-    if best_val_loss is not None:
-        checkpoint["best_val_loss"] = best_val_loss
 
     torch.save(checkpoint, path)
 
@@ -431,14 +455,13 @@ def load_checkpoint(path, model, optimizer=None, amp=None, scheduler=None):
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint["optimizer"])
         optimizer.restored_step = checkpoint["step"]
+        optimizer.best_val_loss = checkpoint["best_val_loss"]
 
     if amp is not None:
         amp.load_state_dict(checkpoint["amp"])
 
     if scheduler is not None:
         scheduler.load_state_dict(checkpoint["scheduler"])
-
-    return checkpoint
 
     # TODO: Breaks when checkpoint loaded on different n gpus to that it was saved on.
     # Even if fixed, dl issues mean reloading is still non-determinisitc so dl needs fixing first.
@@ -461,9 +484,7 @@ def write_current_pid(expdir, pid_path="pid_rank0"):
         pid.flush()
 
 
-def dump_checkpoint_on_kill(
-    model, optimizer, scheduler, checkpoint_out, amp=None, rank=0, ngpus=1, best_val_loss=None
-):
+def dump_checkpoint_on_kill(model, optimizer, scheduler, checkpoint_out, amp=None, rank=0, ngpus=1):
     """Handle kill SIGUSR2 signal by checkpointing the very latest model"""
 
     def signal_handler(signal_num, frame):
@@ -472,8 +493,8 @@ def dump_checkpoint_on_kill(
             step = scheduler._step_count
             out_path = checkpoint_out + ".step" + str(step) + ".preempted"
             print(f"Saving {out_path}")
-            save_checkpoint(out_path, step, model, optimizer, amp, scheduler, best_val_loss)
-            os._exit(2)
+            save_checkpoint(out_path, step, model, optimizer, amp, scheduler)
+            os._exit(12)
         if ngpus > 1:
             dist.barrier()
 
@@ -563,21 +584,24 @@ def resample_1d(x: torch.Tensor, out_size: int) -> torch.Tensor:
     return torch.tensor(resampled_x, dtype=x.dtype, device=x.device)
 
 
-def aggregate_time_stats(times: list, device, workers=1) -> Tuple[float, float]:
-    """ Calculate statistics for timings, potentially across processes """
+# TODO get function aggregating in distributed setting (see below)
+def aggregate_time_stats(times: list, device=None, workers=None) -> Tuple[float, float]:
+    """ Calculate statistics for timings """
+    times = torch.tensor(times)
+    return times.median().item(), times.max().item()
 
-    times = torch.tensor(times, device=device)
 
-    mean_time = times.mean()
-    max_time = times.max()
-
-    # can replace with dist.reduce, but all_reduce is cheap here and enforces consistency
-    if workers > 1:
-        dist.all_reduce(mean_time, op=dist.ReduceOp.SUM)
-        mean_time /= workers
-        dist.all_reduce(max_time, op=dist.ReduceOp.MAX)
-
-    return mean_time.item(), max_time.item()
+# def aggregate_time_stats(times: list, device, workers=1) -> Tuple[float, float]:
+#     """ Calculate statistics for timings, potentially across processes """
+#     times = torch.tensor(times, device=device)
+#     median_time = times.median()
+#     max_time = times.max()
+#     if workers > 1:
+#         # not a true median, but close enough
+#         dist.gather(median_time, gather_list=median_times_all)
+#         median_time = torch.cat(median_times_all).median()
+#         dist.all_reduce(max_time, op=dist.ReduceOp.MAX)
+#     return median_time.item(), max_time.item()
 
 
 def setup_dry_run(FLAGS, dry_step=2):
@@ -648,3 +672,72 @@ def log_tb_histogram(tb_logger, values, name, step, clip=0.0):
     """
     name = name if clip == 0.0 else f"{name}_w{clip}"
     tb_logger.add_histogram(name, winsorize(values, [clip, clip]), step)
+
+
+def log_tb_timings(
+    tb_logger, loader_times: list, model_times: list, step: int, batch_throughput: float = None
+):
+    """
+    aggregate dataloader/model timings and log to tensorboard
+    batch_throughput is an optional value denoting the number of seconds of data in a single batch
+    """
+
+    loader_median_time, loader_max_time = aggregate_time_stats(loader_times)
+    model_median_time, model_max_time = aggregate_time_stats(model_times)
+    tb_logger.add_scalar("z_time/dataloader_batch_median", loader_median_time, step)
+    tb_logger.add_scalar("z_time/dataloader_batch_max", loader_max_time, step)
+    tb_logger.add_scalar("z_time/model_batch_median", model_median_time, step)
+    tb_logger.add_scalar("z_time/model_batch_max", model_max_time, step)
+
+    if batch_throughput is not None:
+        throughput_rate = batch_throughput / (loader_median_time + model_median_time)
+        tb_logger.add_scalar("z_time/throughput_rate", throughput_rate, step)
+
+
+def log_standard_train_stats(
+    rank,
+    step,
+    loss,
+    loader_time=None,
+    model_time=None,
+    fwd_peak_mem=None,
+    fwd_mem=None,
+    bwd_peak_mem=None,
+    bwd_mem=None,
+    batch_throughput=None,
+):
+
+    items = [f"rank {rank}, step {step}, loss {loss.item():.3f}"]
+    if loader_time is not None:
+        items.append(f"dl_time {loader_time:.3f}")
+    if model_time is not None:
+        items.append(f"m_time {model_time:.3f}")
+    if batch_throughput is not None:
+        items.append(f"throughput_rate {batch_throughput / (loader_time + model_time):.1f}s/s")
+    if fwd_peak_mem is not None:
+        items.append(f"f_peak_mem {fwd_peak_mem:.2f}GB")
+    if fwd_mem is not None:
+        items.append(f"f_mem {fwd_mem:.2f}GB")
+    if bwd_peak_mem is not None:
+        items.append(f"b_peak_mem {bwd_peak_mem:.2f}GB")
+    if bwd_mem is not None:
+        items.append(f"b_mem {bwd_mem:.2f}GB")
+
+    logging.info(", ".join(items))
+
+
+def compress_predictions(raw_preds: List[Tuple[float, float, int]]):
+    """
+    Compress contiguous blocks of identical predictions to reduce numbers of pyannote records
+    """
+    preds = []
+    current_phone = None
+    for s_time, e_time, phone in raw_preds:
+        if (phone != current_phone) or (preds and s_time > preds[-1][1]):
+            preds.append([s_time, e_time, phone])
+            current_phone = phone
+        else:
+            # update curent phone "block" end time
+            preds[-1][1] = e_time
+
+    return preds

@@ -30,6 +30,7 @@ from util import (
     load_checkpoint,
     write_current_pid,
     snapshot_memory_usage,
+    dump_checkpoint_on_kill,
 )
 
 
@@ -118,11 +119,16 @@ def train(FLAGS, rank=0):
     scheduler = FlatCA(optimizer, steps=FLAGS.steps, eta_min=1e-6, decay_proportion=1.0)
 
     step = 0
+    optimizer.best_val_loss = inf
 
     if FLAGS.checkpoint:
         # loading state_dicts in-place
         load_checkpoint(FLAGS.checkpoint, model, optimizer, amp=amp, scheduler=scheduler)
         step = optimizer.restored_step
+
+    dump_checkpoint_on_kill(
+        model, optimizer, scheduler, FLAGS.checkpoint_out, amp, rank, FLAGS.n_gpus
+    )
 
     if FLAGS.n_gpus > 1:
         dist_model = DDP(model)
@@ -296,14 +302,14 @@ def train(FLAGS, rank=0):
                 logging.info(f"{step} validation, loss={val_loss.item():.3}")
                 tb_logger.add_scalar("val/loss", val_loss, step)
 
-                if val_loss.item() < best_val_loss:
+                if val_loss.item() < optimizer.best_val_loss:
                     logging.info("Saving new best validation")
                     ext = ".bestval"
                     save(model, FLAGS.model_out + ext)
                     save_checkpoint(
                         FLAGS.checkpoint_out + ext, step, model, optimizer, amp, scheduler
                     )
-                    best_val_loss = val_loss.item()
+                    optimizer.best_val_loss = val_loss.item()
                     trained_model = TrainedLSM(model)
                     save(trained_model, FLAGS.model_out + ext + ".trained")
 
