@@ -58,12 +58,13 @@ def validate(datastream, model, val_steps):
 
             with torch.no_grad():
                 z_e = model.hqa.encode(data_mu)
+                z_q = model.hqa.quantize(z_e)
 
                 # Ensure the offset is correct so always predict one frame in the future
-                z_e_inp = z_e[:, :, :-1]
+                z_q_inp = z_q[:, :, :-1]
                 z_e_target = z_e[:, :, 1:]
 
-                z_e_pred = model(z_e_inp)
+                z_e_pred = model(z_q_inp)
 
                 loss = F.mse_loss(z_e_pred, z_e_target)
                 losses.append(loss.item())
@@ -172,15 +173,16 @@ def train(FLAGS, rank=0):
             data_mu = mu_law_encoding(data)
 
             z_e = model.hqa.encode(data_mu)
+            z_q = model.hqa.quantize(z_e)
 
             # Ensure the offset is correct so always predict one frame in the future
-            z_e_inp = z_e[:, :, :-1]
+            z_q_inp = z_q[:, :, :-1]
             z_e_target = z_e[:, :, 1:]
 
             if FLAGS.n_gpus > 1:
-                z_e_pred = dist_model(z_e_inp)
+                z_e_pred = dist_model(z_q_inp)
             else:
-                z_e_pred = model(z_e_inp)
+                z_e_pred = model(z_q_inp)
 
             loss = F.mse_loss(z_e_target, z_e_pred)
 
@@ -339,11 +341,12 @@ def reconstruct_for_tensorboard(x_mu, model):
     model.eval()
     # TODO: Udpate if scheme is changed
     z_e = model.hqa.encode(x_mu)
-    z_e_inp = z_e[:, :, :-1]
+    z_q = model.hqa.quantize(z_e)
+    z_q_inp = z_q[:, :, :-1]
     with torch.no_grad():
-        z_e_pred = model(z_e_inp)
-        z_q_pred = model.hqa.quantize(z_e_pred)
-    hqa_recon_mu = model.hqa.decode(model.hqa.quantize(z_e))
+        z_e_pred = model(z_q_inp)
+        z_q_pred = model.hqa.quantize(z_e_pred)  # snap to nearest
+    hqa_recon_mu = model.hqa.decode(z_q)
     lsm_recon_mu = model.hqa.decode(z_q_pred)
 
     x_mu = x_mu.squeeze(1)

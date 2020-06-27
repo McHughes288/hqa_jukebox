@@ -305,8 +305,9 @@ def train(FLAGS, rank=0):
 
                 with torch.no_grad():
                     # reconstruct all the way, clip to save memory
-                    if data_mu.shape[2] > 64000:
-                        clipped_data_mu = data_mu[:, :, :64000]
+                    clip = 64000 if len(model) < 5 else 32000
+                    if data_mu.shape[2] > clip:
+                        clipped_data_mu = data_mu[:, :, :clip]
                     else:
                         clipped_data_mu = data_mu
                     orig_mu_recon = model.reconstruct(clipped_data_mu)
@@ -357,12 +358,13 @@ def train(FLAGS, rank=0):
                 and rank == 0
             ):
                 model.eval()
+                clip = 40000 if len(model) < 5 else 160000
                 with FixedRandomState(1):
                     val_data = next(iter(val_datastream))["data"].to(device)
                     val_data = val_data.unsqueeze(1)
                     val_data_mu = mu_law_encoding(val_data)
-                    if val_data_mu.shape[2] > 160000:
-                        clipped_val_data_mu = val_data_mu[:, :, :160000]
+                    if val_data_mu.shape[2] > clip:
+                        clipped_val_data_mu = val_data_mu[:, :, :clip]
                     else:
                         clipped_val_data_mu = val_data_mu
                 val_orig, val_recon = reconstruct_for_tensorboard(clipped_val_data_mu, model)
@@ -412,14 +414,14 @@ def train(FLAGS, rank=0):
                         tb_logger, input_ze_normalized.cpu().flatten(), "emb/input_ze_norm", step
                     )
 
-                enc_conv0_grad = grad_hooks.hooked_values[enc_conv0_weight].cpu()
-                dec_conv0_grad = grad_hooks.hooked_values[dec_conv0_weight].cpu()
-                log_tb_histogram(
-                    tb_logger, enc_conv0_grad.cpu().flatten(), "grad/enc_conv0", step, clip=0.05
-                )
-                log_tb_histogram(
-                    tb_logger, dec_conv0_grad.cpu().flatten(), "grad/dec_conv0", step, clip=0.05
-                )
+                # enc_conv0_grad = grad_hooks.hooked_values[enc_conv0_weight].cpu()
+                # dec_conv0_grad = grad_hooks.hooked_values[dec_conv0_weight].cpu()
+                # log_tb_histogram(
+                #     tb_logger, enc_conv0_grad.cpu().flatten(), "grad/enc_conv0", step, clip=0.05
+                # )
+                # log_tb_histogram(
+                #     tb_logger, dec_conv0_grad.cpu().flatten(), "grad/dec_conv0", step, clip=0.05
+                # )
 
             # Track code usage over time
             with torch.no_grad():

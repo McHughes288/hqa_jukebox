@@ -1,7 +1,7 @@
 #!/bin/bash -eux
 
 # assumes we are on cam2aml01.aml.speechmatics.io
-GPUQ="-q gpu.q@cam2aml01.aml.speechmatics.io"
+GPUQ="-q gpu.q" #@cam2aml01.aml.speechmatics.io"
 VENV=/cantab/dev/inbetweeners/hydra/venv_stable/bin/activate
 train_data=/perish/data/music/train.dbl
 val_data=/perish/data/music/hqa_val_short.dbl
@@ -19,12 +19,12 @@ done
 ## set here
 
 seed=1
-priority=600
-WORK_ROOT=//cantab/dev/inbetweeners/hqa_jukebox/exp/${USER}_body_${EXPNAME}
+priority=100
+WORK_ROOT=/cantab/dev/inbetweeners/hqa_jukebox/exp/${USER}_body_${EXPNAME}
 
 # stable params
 amp_level="O1"
-n_gpus=4
+n_gpus=1
 msg="full hqa jukebox stack"
 
 log_every=50
@@ -34,8 +34,8 @@ save_every=10000
 
 # changable params as increase layers
 window_size=16384
-batch_size=4 # per gpu
-minimum_batch_size=4
+batch_size=16 # per gpu
+minimum_batch_size=16
 steps=200000
 
 codebook_slots=512
@@ -69,7 +69,7 @@ mkdir -p "${WORK_ROOT}"/
 ( cd $CODE_DIR && echo "$(date -u) $(git describe --always --abbrev=40 --dirty)")>> "${WORK_ROOT}"/git_sha
 rsync --quiet -avhz --exclude "data_edgecase" --exclude "*ipynb*" --exclude "venv" --exclude ".git" --exclude "**/__pycache__" --exclude "htmlcov" "$CODE_DIR"/ "${WORK_ROOT}"/code
 
-for layer in 0 1 2 3 4; do
+for layer in 4; do
 
     case $layer in
     0) prev_model=
@@ -109,7 +109,7 @@ for layer in 0 1 2 3 4; do
        enc_num_layers=1
        ;;
     4) prev_model=${WORK_ROOT}/layer3.pt
-       window_size=64000
+       window_size=60000
        codebook_groups=10
        enc_strides=2
        dec_dilation_depth=6
@@ -119,7 +119,8 @@ for layer in 0 1 2 3 4; do
        ;;
     esac
 
-    WORK_DIR=${WORK_ROOT}/$(date +"%Y%m%d")_${EXPNAME}_l${layer}
+   #$(date +"%Y%m%d")
+    WORK_DIR=${WORK_ROOT}/20200615_${EXPNAME}_l${layer}
     if [[ -f "${WORK_DIR}/model.pt" ]]; then
         echo "${WORK_DIR} is already done. Skipping!"
         continue

@@ -2,7 +2,7 @@
 
 # assumes we are on cam2aml01.aml.speechmatics.io
 GPUQ="-q gpu.q"
-VENV=/home/willw/venv_unstable/bin/activate
+VENV=/cantab/dev/inbetweeners/hydra/venv_stable
 train_data=/perish/data/music/train.dbl
 val_data=/perish/data/music/val.dbl
 CUDA_WRAPPER=/usr/bin/cuda_wrapper
@@ -15,9 +15,8 @@ WORK_ROOT=/cantab/dev/inbetweeners/hqa_jukebox/exp/${USER}_body_${EXPNAME}
 amp="O1"
 n_gpus=1
 
-msg="Go back to pred z_e but with no tanh models"
-run_name="save_trained"
-hqa_root= #TODO
+msg="Single artist lsm"
+hqa_path=/cantab/dev/inbetweeners/hqa_jukebox/exp/johnh_body_full_stack.sh/20200615_full_stack.sh_l3/model.pt
 checkpoint=
 
 window_size=32000
@@ -34,24 +33,14 @@ learning_rate=4e-4
 ## end set
 ###############
 
-for layer in 4_small_decoder 4_smaller_cd 4_smaller_cg; do
-    hqa_path=${hqa_root}_l${layer}/model.pt
-    WORK_DIR=${WORK_ROOT}/$(date +"%Y%m%d")_${EXPNAME}_ws${window_size}_h${hidden_dim}_l${num_layers}_hqa${layer}
+for layer in 3; do
+    # hqa_path=${hqa_root}_l${layer}/model.pt
+    # WORK_DIR=${WORK_ROOT}/$(date +"%Y%m%d")_${EXPNAME}_ws${window_size}_h${hidden_dim}_l${num_layers}_hqa${layer}
 
-    if [[ -f "$WORK_DIR/done" ]]; then
-        (echo >&2 "$(tput setaf 3)$WORK_DIR is already done. Skipping!$(tput sgr0)")
-        continue
-    fi
-    if [[ -f "$WORK_DIR/inflight" ]]; then
-        (echo >&2 "$(tput setaf 3)$WORK_DIR is already inflight. Skipping!$(tput sgr0)")
-        continue
-    fi
+    mkdir -p "$WORK_DIR"
+    rsync --quiet -avhz --exclude "*ipynb*" --exclude "venv" --exclude ".git" --exclude "**/__pycache__" "$CODE_DIR"/* "$WORK_DIR"/code
 
-    (
-        mkdir -p "$WORK_DIR"
-        rsync --quiet -avhz --exclude "apis" --exclude "functests" --exclude "*ipynb*" --exclude "build" --exclude "venv" --exclude "unittests" --exclude "logs" --exclude ".git" --exclude "**/__pycache__" --exclude ".pytest_cache" --exclude "exp" --exclude "htmlcov" "$CODE_DIR"/* "$WORK_DIR"/code
-
-        cat <<EOF >"${WORK_DIR}"/launch.qsh
+    cat <<EOF >"${WORK_DIR}"/launch.qsh
 #!/bin/bash
 #$ -cwd
 #$ -j y
@@ -61,6 +50,11 @@ for layer in 4_small_decoder 4_smaller_cd 4_smaller_cg; do
 #$ -w e
 #$ -wd $WORK_DIR/code
 #$ -pe local $n_gpus
+#$ -p $priority
+#$ -notify
+#$ -o ${WORK_DIR}/results.log
+#$ -sync n
+#$ -N "jb_lsm_${layer}"
 set -e pipefail;
 
 # job info
@@ -82,11 +76,17 @@ function cleanup {
   exit \$err
 }
 trap cleanup EXIT INT QUIT TERM
-echo "\${JOB_ID}" > ${WORK_DIR}/inflight
 
-export CUDA_HOME=/usr/local/cuda-10.1/
-source $VENV \
-&& $CUDA_WRAPPER $n_gpus time python3.7 -m lsm.train \
+echo "\$(date -u) starting \${JOB_ID}" >> ${WORK_DIR}/sge_job_id
+
+echo "\${JOB_ID}" > ${WORK_DIR}/inflight \
+&& cd $WORK_DIR/code \
+&& VIRTUAL_ENV_DISABLE_PROMPT=true source $VENV/bin/activate \
+&& pip3 freeze &> ${WORK_DIR}/pip_freeze.log
+
+# export CUDA_HOME=/usr/local/cuda-10.1/
+
+$CUDA_WRAPPER $n_gpus time python3.7 -m lsm.train \
     --expdir=${WORK_DIR} \
     --hqa_path=${hqa_path} \
     --window_size=${window_size} \
@@ -108,13 +108,12 @@ source $VENV \
 && touch ${WORK_DIR}/done \
 && echo "Done"
 EOF
+    if [[ -f "$WORK_DIR/done" ]]; then
+        >&2 echo "${WORK_DIR} is already done. Skipping!"
+    else
         chmod +x "${WORK_DIR}"/launch.qsh
-
-        set -x
-        qsub -sync n -o "${WORK_DIR}"/results.log -N "${EXPNAME}" -sc directory="${WORK_DIR}" "${WORK_DIR}/launch.qsh"
-        set +x
-    ) &
-    sleep 12
+        echo "Launching: ${WORK_DIR}/launch.qsh"
+        echo "Job launched"
+    fi
 done
-
-sleep 0.5 && wait && echo "All queued up"
+echo "Done"
